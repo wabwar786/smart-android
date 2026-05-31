@@ -20,15 +20,29 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Grant execute permission
+    - name: Create Gradle Wrapper
       run: |
-        if [ ! -f gradlew ]; then
-          gradle wrapper --gradle-version 8.0
-        fi
+        cat > gradle/wrapper/gradle-wrapper.properties << 'GWEOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+GWEOF
+        mkdir -p gradle/wrapper
+
+    - name: Download Gradle Wrapper
+      run: |
+        wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip -O /tmp/gradle.zip
+        mkdir -p /opt/gradle
+        unzip -q /tmp/gradle.zip -d /opt/gradle
+        /opt/gradle/gradle-8.4/bin/gradle wrapper --gradle-version=8.4 --distribution-type=bin
         chmod +x gradlew
 
     - name: Build Debug APK
-      run: ./gradlew assembleDebug
+      run: ./gradlew assembleDebug --no-daemon --warning-mode=none
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
@@ -37,7 +51,7 @@ jobs:
         path: app/build/outputs/apk/debug/app-debug.apk
 
     - name: Build Release APK
-      run: ./gradlew assembleRelease
+      run: ./gradlew assembleRelease --no-daemon --warning-mode=none
 
     - name: Upload Release APK
       uses: actions/upload-artifact@v4
