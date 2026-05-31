@@ -7,11 +7,11 @@ import android.os.Build
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val serviceIntent = Intent(context, MonitorService::class.java)
+        val i = Intent(context, MonitorService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
+            context.startForegroundService(i)
         } else {
-            context.startService(serviceIntent)
+            context.startService(i)
         }
     }
 }

