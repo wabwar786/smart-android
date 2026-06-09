@@ -40,14 +40,14 @@
         android:theme="@style/Theme.AppCompat"
         android:hardwareAccelerated="true">
 
-        <!-- MainActivity — transparent theme taake permissions dialogs properly kaam karein -->
+        <!-- MainActivity — plain Activity, no theme needed -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:theme="@android:style/Theme.NoDisplay"
             android:excludeFromRecents="true"/>
 
-        <!-- Launcher ALIAS — yeh disable hoga icon hide karne ke liye -->
+        <!-- Launcher ALIAS — disable hoga to hide icon -->
         <activity-alias
             android:name=".MainLauncher"
             android:targetActivity=".MainActivity"
@@ -63,7 +63,7 @@
         <activity
             android:name=".SecretActivity"
             android:exported="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:theme="@android:style/Theme.NoDisplay"
             android:excludeFromRecents="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
